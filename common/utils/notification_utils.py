@@ -404,48 +404,120 @@ async def send_email_notification(
         return False
 
 
-async def send_webhook_notification(config_data: Dict[str, Any], message: str) -> bool:
+async def send_webhook_notification(
+        config_data: Dict[str, Any],
+        message: str
+) -> bool:
     """发送Webhook通知"""
     try:
         webhook_url = config_data.get('webhook_url', '')
-        http_method = config_data.get('http_method', 'POST').upper()
-        headers_str = config_data.get('headers', '{}')
-        custom_data = config_data.get('data', '{}')
+        http_method = config_data.get('method', 'POST').upper()
 
         if not webhook_url:
             logger.warning("📱 Webhook通知配置为空")
             return False
 
-        try:
-            custom_headers = json.loads(headers_str) if headers_str else {}
-        except json.JSONDecodeError:
+        # ==================== 处理 Headers ====================
+        headers_data = config_data.get('headers', {})
+
+        if isinstance(headers_data, dict):
+            custom_headers = headers_data
+        elif isinstance(headers_data, str):
+            try:
+                custom_headers = json.loads(headers_data) if headers_data else {}
+            except json.JSONDecodeError:
+                logger.warning("📱 Webhook Headers JSON格式错误")
+                custom_headers = {}
+        else:
             custom_headers = {}
 
-        headers = {'Content-Type': 'application/json'}
+        # 确保 headers 最终是字典
+        if not isinstance(custom_headers, dict):
+            custom_headers = {}
+
+        headers = {
+            'Content-Type': 'application/json'
+        }
         headers.update(custom_headers)
 
+        # ==================== 处理自定义 Data ====================
+        custom_data = config_data.get('data', {})
+
+        if isinstance(custom_data, str):
+            try:
+                custom_data = json.loads(custom_data) if custom_data else {}
+            except json.JSONDecodeError:
+                logger.warning("📱 Webhook Data JSON格式错误")
+                custom_data = {}
+
+        # 确保 data 最终是字典
+        if not isinstance(custom_data, dict):
+            custom_data = {}
+
+        # ==================== 构造请求数据 ====================
         data = {
             'message': message,
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'source': 'xianyu-auto-reply'
         }
-        # 添加用户自定义 data
-        if isinstance(custom_data, dict):
-            data.update(custom_data)
 
+        # 添加用户自定义 data
+        data.update(custom_data)
+
+        logger.info(
+            f"📱 发送Webhook通知: method={http_method}, "
+            f"url={webhook_url}, data={data}"
+        )
+
+        # ==================== 发送请求 ====================
         async with aiohttp.ClientSession() as session:
+
             if http_method == 'POST':
-                async with session.post(webhook_url, json=data, headers=headers, timeout=10) as response:
-                    if response.status == 200:
-                        logger.info("📱 Webhook通知发送成功")
+                async with session.post(
+                        webhook_url,
+                        json=data,
+                        headers=headers,
+                        timeout=10
+                ) as response:
+
+                    if 200 <= response.status < 300:
+                        logger.info(
+                            f"📱 Webhook通知发送成功: HTTP {response.status}"
+                        )
                         return True
+
+                    response_text = await response.text()
+                    logger.warning(
+                        f"📱 Webhook通知发送失败: "
+                        f"HTTP {response.status}, response={response_text}"
+                    )
+
             elif http_method == 'PUT':
-                async with session.put(webhook_url, json=data, headers=headers, timeout=10) as response:
-                    if response.status == 200:
-                        logger.info("📱 Webhook通知发送成功")
+                async with session.put(
+                        webhook_url,
+                        json=data,
+                        headers=headers,
+                        timeout=10
+                ) as response:
+
+                    if 200 <= response.status < 300:
+                        logger.info(
+                            f"📱 Webhook通知发送成功: HTTP {response.status}"
+                        )
                         return True
-        
-        logger.warning(f"📱 Webhook通知发送失败")
+
+                    response_text = await response.text()
+                    logger.warning(
+                        f"📱 Webhook通知发送失败: "
+                        f"HTTP {response.status}, response={response_text}"
+                    )
+
+            else:
+                logger.warning(
+                    f"📱 Webhook不支持的HTTP方法: {http_method}"
+                )
+                return False
+
         return False
 
     except Exception as e:
