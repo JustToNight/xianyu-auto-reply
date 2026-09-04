@@ -66,7 +66,8 @@ const channelTypes = [
     defaultConfig: {
       webhook_url: "https://你的webhook地址",
       method: "POST",
-      headers: {}
+      headers: {},
+      data: {}
     }
   },
   { 
@@ -313,6 +314,10 @@ export function NotificationChannels() {
   if (loading) {
     return <PageLoading />
   }
+
+
+
+
 
   return (
     <div className="space-y-6">

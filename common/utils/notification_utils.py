@@ -410,8 +410,9 @@ async def send_webhook_notification(config_data: Dict[str, Any], message: str) -
         webhook_url = config_data.get('webhook_url', '')
         http_method = config_data.get('http_method', 'POST').upper()
         headers_str = config_data.get('headers', '{}')
+        custom_data = config_data.get('data', '{}')
 
-        if not webhook_url:
+    if not webhook_url:
             logger.warning("📱 Webhook通知配置为空")
             return False
 
@@ -428,6 +429,9 @@ async def send_webhook_notification(config_data: Dict[str, Any], message: str) -
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'source': 'xianyu-auto-reply'
         }
+        # 添加用户自定义 data
+        if isinstance(custom_data, dict):
+            data.update(custom_data)
 
         async with aiohttp.ClientSession() as session:
             if http_method == 'POST':
@@ -460,6 +464,7 @@ async def send_wechat_notification(config_data: Dict[str, Any], message: str) ->
         data = {
             "msgtype": "text",
             "text": {"content": message}
+            "t1":"v1"
         }
 
         async with aiohttp.ClientSession() as session:
