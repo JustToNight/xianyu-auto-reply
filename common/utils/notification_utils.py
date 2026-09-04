@@ -412,7 +412,7 @@ async def send_webhook_notification(config_data: Dict[str, Any], message: str) -
         headers_str = config_data.get('headers', '{}')
         custom_data = config_data.get('data', '{}')
 
-    if not webhook_url:
+        if not webhook_url:
             logger.warning("📱 Webhook通知配置为空")
             return False
 
