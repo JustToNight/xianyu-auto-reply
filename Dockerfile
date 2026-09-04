@@ -26,3 +26,5 @@ RUN python -m playwright install --with-deps chromium
 RUN python -m patchright install --with-deps chromium
 
 WORKDIR /app
+
+#docker build -t xianyu-python-playwright:latest -f Dockerfile .
