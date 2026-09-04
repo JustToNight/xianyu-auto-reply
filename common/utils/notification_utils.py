@@ -464,7 +464,6 @@ async def send_wechat_notification(config_data: Dict[str, Any], message: str) ->
         data = {
             "msgtype": "text",
             "text": {"content": message}
-            "t1":"v1"
         }
 
         async with aiohttp.ClientSession() as session:
