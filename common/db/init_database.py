@@ -585,8 +585,13 @@ class DatabaseInitializer:
                 account_id BIGINT COMMENT '关联账号ID',
                 keyword VARCHAR(120) NOT NULL COMMENT '关键词',
                 reply_content TEXT COMMENT '回复内容',
-                reply_type VARCHAR(16) COMMENT '回复类型(text/image)',
+                reply_type VARCHAR(32) COMMENT '回复类型(text/image/external_contact)',
                 image_url VARCHAR(512) COMMENT '图片URL',
+                location_name VARCHAR(255) COMMENT '站外联系方式定位名称',
+                location_longitude VARCHAR(32) COMMENT '站外联系方式经度',
+                location_latitude VARCHAR(32) COMMENT '站外联系方式纬度',
+                location_title VARCHAR(128) COMMENT '站外联系方式位置标题',
+                location_subtitle VARCHAR(255) COMMENT '站外联系方式位置副标题',
                 item_id VARCHAR(64) COMMENT '商品ID',
                 priority INT DEFAULT 100 COMMENT '优先级',
                 is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用',
@@ -706,11 +711,16 @@ class DatabaseInitializer:
                 account_id VARCHAR(80) NOT NULL COMMENT '账号标识',
                 item_id VARCHAR(64) DEFAULT NULL COMMENT '商品ID(空为账号默认回复)',
                 enabled TINYINT(1) DEFAULT 0 COMMENT '是否启用',
-                reply_type VARCHAR(16) DEFAULT 'text' COMMENT '回复类型：text-文本(可附带图片)，api-接口',
+                reply_type VARCHAR(32) DEFAULT 'text' COMMENT '回复类型：text-文本，api-接口，external_contact-站外联系方式',
                 reply_content TEXT COMMENT '回复内容',
                 reply_image VARCHAR(512) COMMENT '回复图片URL',
                 api_url VARCHAR(1024) DEFAULT NULL COMMENT 'API地址(reply_type=api时POST此地址)',
                 api_timeout INT DEFAULT 80 COMMENT 'API请求超时时间(秒)',
+                location_name VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称',
+                location_longitude VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度',
+                location_latitude VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度',
+                location_title VARCHAR(128) DEFAULT NULL COMMENT '站外联系方式位置标题',
+                location_subtitle VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式位置副标题',
                 reply_once TINYINT(1) DEFAULT 0 COMMENT '只回复一次',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -1862,10 +1872,89 @@ class DatabaseInitializer:
                 INDEX idx_chat_quick_phrase_owner_sort (owner_id, sort_order)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='在线聊天快捷短语';
         """,
+
+        # 52. AI铺货配置表
+        "xy_ai_listing_configs": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_configs (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                name VARCHAR(80) NOT NULL COMMENT '配置名称',
+                provider_type VARCHAR(30) NOT NULL DEFAULT 'openai_compatible' COMMENT '服务商类型：openai_compatible 等',
+                text_base_url VARCHAR(300) NOT NULL COMMENT '文案接口地址',
+                text_api_key VARCHAR(500) NOT NULL COMMENT '文案接口密钥',
+                text_model VARCHAR(100) NOT NULL COMMENT '文案模型名称',
+                text_temperature DECIMAL(4,2) NOT NULL DEFAULT 0.70 COMMENT '文案生成温度',
+                text_max_tokens INT NOT NULL DEFAULT 2048 COMMENT '文案生成最大token数',
+                prompt_template TEXT DEFAULT NULL COMMENT '自定义提示词模板（为空则用内置模板）',
+                image_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用AI图片生成',
+                image_base_url VARCHAR(300) DEFAULT NULL COMMENT '图片接口地址',
+                image_api_key VARCHAR(500) DEFAULT NULL COMMENT '图片接口密钥',
+                image_model VARCHAR(100) DEFAULT NULL COMMENT '图片模型名称',
+                image_size VARCHAR(20) NOT NULL DEFAULT '1024x1024' COMMENT '图片尺寸，如 1024x1024',
+                image_count INT NOT NULL DEFAULT 1 COMMENT '每条素材生成图片数量（1~9）',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX ix_xy_ai_listing_configs_owner_id (owner_id),
+                INDEX idx_alc_owner_deleted (owner_id, is_deleted)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货配置表';
+        """,
+
+        # 53. AI铺货任务表
+        "xy_ai_listing_tasks": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_tasks (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                task_id VARCHAR(36) NOT NULL COMMENT '任务ID（UUID）',
+                config_id BIGINT NOT NULL COMMENT '使用的AI铺货配置ID',
+                config_name VARCHAR(80) DEFAULT NULL COMMENT '配置名称快照',
+                keyword VARCHAR(200) NOT NULL COMMENT '生成主题/关键词',
+                total_count INT NOT NULL DEFAULT 0 COMMENT '计划生成条数',
+                success_count INT NOT NULL DEFAULT 0 COMMENT '已成功条数',
+                failed_count INT NOT NULL DEFAULT 0 COMMENT '已失败条数',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/running/success/partial/failed/canceled',
+                error_message VARCHAR(1000) DEFAULT NULL COMMENT '整体失败原因',
+                params JSON DEFAULT NULL COMMENT '提交参数快照（价格模式、素材默认值等）',
+                started_at DATETIME DEFAULT NULL COMMENT '开始执行时间',
+                finished_at DATETIME DEFAULT NULL COMMENT '执行结束时间',
+                is_deleted TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                UNIQUE KEY uq_xy_ai_listing_tasks_task_id (task_id),
+                INDEX ix_xy_ai_listing_tasks_owner_id (owner_id),
+                INDEX idx_alt_owner_created (owner_id, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货任务表';
+        """,
+
+        # 54. AI铺货任务明细表
+        "xy_ai_listing_task_items": """
+            CREATE TABLE IF NOT EXISTS xy_ai_listing_task_items (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+                task_id VARCHAR(36) NOT NULL COMMENT '所属任务ID',
+                owner_id BIGINT NOT NULL COMMENT '归属用户（本系统用户ID）',
+                seq INT NOT NULL DEFAULT 0 COMMENT '序号（从1开始）',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/running/success/failed',
+                title VARCHAR(200) DEFAULT NULL COMMENT '生成的商品标题',
+                material_id BIGINT DEFAULT NULL COMMENT '入库后的素材ID',
+                image_count INT NOT NULL DEFAULT 0 COMMENT '本条素材图片数量',
+                error_message VARCHAR(1000) DEFAULT NULL COMMENT '失败原因',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                INDEX ix_xy_ai_listing_task_items_task_id (task_id),
+                INDEX idx_alti_task_status (task_id, status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI铺货任务明细表';
+        """,
     }
     
     # 字段迁移定义：表名 -> [(字段名, 字段定义, 在哪个字段后面)]
     COLUMN_MIGRATIONS = {
+        "xy_keyword_rules": [
+            ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "image_url"),
+            ("location_longitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度'", "location_name"),
+            ("location_latitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度'", "location_longitude"),
+            ("location_title", "VARCHAR(128) DEFAULT NULL COMMENT '站外联系方式位置标题'", "location_latitude"),
+            ("location_subtitle", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式位置副标题'", "location_title"),
+        ],
         "xy_recharge_orders": [
             ("order_type", "VARCHAR(20) NOT NULL DEFAULT 'recharge' COMMENT '订单类型：recharge-余额充值，ad-广告申请付款'", "amount"),
         ],
@@ -1887,8 +1976,10 @@ class DatabaseInitializer:
             ("specifications", "JSON DEFAULT NULL COMMENT '商品规格列表'", "videos"),
             ("sku_rows", "JSON DEFAULT NULL COMMENT '规格组合价格和库存列表'", "specifications"),
             ("quantity", "INT NOT NULL DEFAULT 1 COMMENT '发布数量'", "sku_rows"),
+            ("delivery_method", "VARCHAR(20) DEFAULT 'express' COMMENT '发货方式：express-快递, pickup-自提'", "quantity"),
             ("shipping_method", "VARCHAR(20) DEFAULT 'free' COMMENT '运费方式：free/distance/fixed/template/none'", "delivery_method"),
             ("support_pickup", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否支持自提'", "shipping_method"),
+            ("postage", "DECIMAL(8,2) DEFAULT 0 COMMENT '邮费，0表示包邮'", "support_pickup"),
             ("address_expected_text", "VARCHAR(200) DEFAULT NULL COMMENT '所在地选择时的期望文本'", "address"),
             ("is_deleted", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已删除（软删除）'", "remark"),
         ],
@@ -2028,9 +2119,14 @@ class DatabaseInitializer:
         "xy_default_replies": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),
             ("reply_image", "VARCHAR(512) COMMENT '回复图片URL'", "reply_content"),
-            ("reply_type", "VARCHAR(16) DEFAULT 'text' COMMENT '回复类型：text-文本(可附带图片)，api-接口'", "enabled"),
+            ("reply_type", "VARCHAR(32) DEFAULT 'text' COMMENT '回复类型：text-文本，api-接口，external_contact-站外联系方式'", "enabled"),
             ("api_url", "VARCHAR(1024) DEFAULT NULL COMMENT 'API地址(reply_type=api时POST此地址)'", "reply_image"),
             ("api_timeout", "INT DEFAULT 80 COMMENT 'API请求超时时间(秒)'", "api_url"),
+            ("location_name", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式定位名称'", "api_timeout"),
+            ("location_longitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式经度'", "location_name"),
+            ("location_latitude", "VARCHAR(32) DEFAULT NULL COMMENT '站外联系方式纬度'", "location_longitude"),
+            ("location_title", "VARCHAR(128) DEFAULT NULL COMMENT '站外联系方式位置标题'", "location_latitude"),
+            ("location_subtitle", "VARCHAR(255) DEFAULT NULL COMMENT '站外联系方式位置副标题'", "location_title"),
         ],
         "xy_default_reply_records": [
             ("item_id", "VARCHAR(64) DEFAULT NULL COMMENT '商品ID'", "account_id"),
@@ -2198,6 +2294,22 @@ class DatabaseInitializer:
                         """)
                         result = await conn.execute(check_sql)
                         exists = result.scalar() > 0
+
+                        # Existing installations may have the original VARCHAR(16) reply type.
+                        # Expand it before storing external_contact.
+                        if exists and table_name == "xy_default_replies" and col_name == "reply_type":
+                            length_result = await conn.execute(text("""
+                                SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+                                WHERE TABLE_SCHEMA = DATABASE()
+                                AND TABLE_NAME = 'xy_default_replies'
+                                AND COLUMN_NAME = 'reply_type'
+                            """))
+                            current_length = length_result.scalar()
+                            if current_length and current_length < 32:
+                                await conn.execute(text(
+                                    "ALTER TABLE xy_default_replies MODIFY COLUMN reply_type VARCHAR(32) DEFAULT 'text' COMMENT 'reply type'"
+                                ))
+                                logger.info("Expanded xy_default_replies.reply_type to VARCHAR(32)")
                         
                         if not exists:
                             # 添加字段
