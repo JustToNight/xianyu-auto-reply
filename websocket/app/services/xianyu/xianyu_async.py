@@ -23,7 +23,14 @@ from common.utils.xianyu_utils import (
 )
 from common.utils.time_utils import get_beijing_now_naive
 from common.utils.text_utils import safe_str
+from common.utils.xianyu_official_accounts import (
+    is_xianyu_official_robot_user,
+    message_targets_official_robot,
+)
 from app.services.xianyu.connection_manager import ConnectionManager, ConnectionState
+from app.services.xianyu.connection_errors import (
+    is_network_connection_error, is_token_or_session_failure,
+)
 from app.services.xianyu.token_manager import TokenManager
 
 # 配置常量
@@ -718,8 +725,10 @@ class XianyuAsync:
                     item_id = parsed_message.get("item_id", "")
                     send_user_id = parsed_message.get("send_user_id", "")
                     msg_time = parsed_message.get("msg_time", "")
+                    is_plain_text = bool(parsed_message.get("is_plain_text", False))
                     
-                    # 0. 检查是否是自己发出的消息，且包含重发货触发关键字
+                    # 0. 检查是否是自己发出的消息，且包含重发货触发关键字。
+                    # 这是卖家主动操作，不参与普通文本自动发货拦截。
                     myid = getattr(self, 'myid', self.cookie_id)
                     if send_user_id == myid and send_message:
                         try:
@@ -908,6 +917,11 @@ class XianyuAsync:
                     
                     # 检查是否是自动发货触发消息（参照旧框架）
                     if auto_reply_service.is_auto_delivery_trigger(send_message):
+                        if is_plain_text:
+                            logger.info(
+                                f"【{self.cookie_id}】普通文本不触发自动发货: {send_message}"
+                            )
+                            return
                         # 检查是否启用自动确认发货
                         if self.is_auto_confirm_enabled() or self.is_only_send_card_enabled():
                             logger.info(f"【{self.cookie_id}】✅ 触发自动发货流程: {send_message}")
@@ -950,12 +964,18 @@ class XianyuAsync:
                     item_id = parsed_message.get("item_id", "")
                     send_user_id = parsed_message.get("send_user_id", "")
                     msg_time = parsed_message.get("msg_time", "")
+                    is_plain_text = bool(parsed_message.get("is_plain_text", False))
                     
                     # 处理订单状态（获取订单详情）
                     await self._process_order_status(raw_message, send_message, item_id, send_user_id, msg_time)
                     
                     # 检查是否是自动发货触发消息
                     if auto_reply_service.is_auto_delivery_trigger(send_message):
+                        if is_plain_text:
+                            logger.info(
+                                f"【{self.cookie_id}】普通文本不触发自动发货: {send_message}"
+                            )
+                            return
                         if self.is_auto_confirm_enabled() or self.is_only_send_card_enabled():
                             logger.info(f"【{self.cookie_id}】✅ 卡片更新消息触发自动发货流程: {send_message}")
                             await self._handle_auto_delivery_from_message(parsed_message, ws)
@@ -1465,6 +1485,12 @@ class XianyuAsync:
             msg_time = parsed_message.get("msg_time", "")
             raw_message = parsed_message.get("raw_message", {})
             
+            if parsed_message.get("is_plain_text", False):
+                logger.info(
+                    f"【{self.cookie_id}】普通文本不触发自动发货: {send_message}"
+                )
+                return
+
             logger.info(f"【{self.cookie_id}】开始处理自动发货: item_id={item_id}, chat_id={chat_id}")
             
             # 调用auto_delivery_handler的_handle_auto_delivery方法
@@ -1969,6 +1995,19 @@ class XianyuAsync:
         同时注册 mid 等待队列，返回结果中携带 mid，供上层在写入日志后
         异步等待服务端响应、回写发送状态（识别 CSI_FORBID 安全拦截等失败）。
         """
+        if is_xianyu_official_robot_user(send_user_id):
+            error_message = "禁止向闲鱼官方机器人发送消息"
+            logger.warning(
+                f"【{self.cookie_id}】{error_message}: "
+                f"send_user_id={send_user_id}, chat_id={chat_id}"
+            )
+            return {
+                "success": False,
+                "mode": "text",
+                "content": content,
+                "error_message": error_message,
+            }
+
         try:
             import base64
             from common.utils.xianyu_utils import generate_mid, generate_uuid
@@ -2057,6 +2096,15 @@ class XianyuAsync:
                 "success": False,
                 "mode": "external_contact",
                 "error_message": "远程位置接口未返回有效消息报文",
+            }
+
+        if message_targets_official_robot(message):
+            error_message = "禁止向闲鱼官方机器人发送消息"
+            logger.warning(f"【{self.cookie_id}】{error_message}: mode=external_contact")
+            return {
+                "success": False,
+                "mode": "external_contact",
+                "error_message": error_message,
             }
 
         headers = message.get("headers")
@@ -2302,25 +2350,6 @@ class XianyuAsync:
                 "FAIL_SYS_TOKEN_EXOIRED",
                 "SESSION_EXPIRED",
                 "TOKEN_EXPIRED",
-            )
-        )
-
-    @staticmethod
-    def _is_explicit_token_or_session_failure(error_type: str, error_msg: str) -> bool:
-        """仅在建连异常明确表示认证失效时允许清理 Token 缓存。"""
-        error_text = f"{error_type} {error_msg}".upper()
-        return any(
-            marker in error_text
-            for marker in (
-                "FAIL_SYS_SESSION_EXPIRED",
-                "FAIL_SYS_TOKEN_EXPIRED",
-                "FAIL_SYS_TOKEN_EXOIRED",
-                "SESSION_EXPIRED",
-                "TOKEN_EXPIRED",
-                "SESSION IS INVALID",
-                "INVALID SESSION",
-                "TOKEN IS INVALID",
-                "INVALID TOKEN",
             )
         )
 
@@ -2617,6 +2646,19 @@ class XianyuAsync:
                 - 具体值: 更新指定商品的默认回复图片
             image_index: 多图片索引（可选，用于更新卡券多图片列表中指定索引的URL）
         """
+        if is_xianyu_official_robot_user(send_user_id):
+            error_message = "禁止向闲鱼官方机器人发送消息"
+            logger.warning(
+                f"【{self.cookie_id}】{error_message}: "
+                f"send_user_id={send_user_id}, chat_id={chat_id}, mode=image"
+            )
+            return {
+                "success": False,
+                "mode": "image",
+                "image_url": image_url,
+                "error_message": error_message,
+            }
+
         try:
             import base64
             import os
@@ -2880,6 +2922,8 @@ class XianyuAsync:
             logger.info(f"【{self.cookie_id}】Session创建完成,开始WebSocket连接循环...")
             
             while True:
+                # 单独记录传输连接建立时间，覆盖 init() 完成前被关闭的情况。
+                websocket_opened_at = 0.0
                 try:
                     runtime_state = await self._load_runtime_account_state()
                     if runtime_state is not None:
@@ -3042,6 +3086,7 @@ class XianyuAsync:
                     
                     # 创建WebSocket连接
                     async with await self.connection_manager.create_websocket_connection(headers) as websocket:
+                        websocket_opened_at = time.time()
                         self.connection_manager.ws = websocket
                         logger.info(f"【{self.cookie_id}】WebSocket连接建立成功,开始初始化...")
                         
@@ -3150,15 +3195,9 @@ class XianyuAsync:
                     error_msg = str(e)
                     error_type = type(e).__name__
                     
-                    # 检查是否是网络类型错误
-                    is_network_type_error = (
-                        'ConnectionClosedError' in error_type or
-                        'ConnectionClosed' in error_type or
-                        'no close frame received or sent' in error_msg or
-                        'ConnectionResetError' in error_type or
-                        'TimeoutError' in error_type or
-                        'connection reset' in error_msg.lower()
-                    )
+                    # 关闭帧也可能报告认证失效，必须优先于网络错误分类。
+                    is_explicit_auth_error = is_token_or_session_failure(e)
+                    is_network_type_error = is_network_connection_error(e)
                     
                     # 计算本次连接尝试的持续时间（从开始尝试连接到出错）
                     attempt_duration = time.time() - getattr(self, '_connection_attempt_start_time', time.time())
@@ -3175,23 +3214,48 @@ class XianyuAsync:
                     if self.connection_manager.ws:
                         self.connection_manager.ws = None
                     
-                    if is_network_type_error and was_connected:
-                        if self._reject_expired_startup_token_after_short_disconnect(
-                            connected_duration
+                    if is_network_type_error:
+                        if (
+                            (was_connected or (
+                                websocket_opened_at > 0
+                                and 'ConnectionClosed' in error_type
+                            ))
+                            and self._reject_expired_startup_token_after_short_disconnect(
+                                connected_duration if was_connected
+                                else time.time() - websocket_opened_at
+                            )
                         ):
                             self.connection_manager.set_connection_state(
                                 ConnectionState.RECONNECTING,
                                 "启动过期Token连接被快速断开",
                             )
-                            await self._interruptible_sleep(self.token_retry_interval)
+                            retry_delay = (
+                                self.token_retry_interval if was_connected
+                                else self.connection_manager.calculate_network_retry_delay()
+                            )
+                            await self._interruptible_sleep(retry_delay)
                             continue
 
-                        # 纯网络错误：连接已经正常工作过，只是网络断开
+                        # 纯网络错误不累计认证失败，包含握手阶段的 WinError 121。
                         self.connection_manager.network_failures += 1
-                        logger.warning(f"【{self.cookie_id}】网络连接断开(第{self.connection_manager.network_failures}次，已连接{connected_duration:.1f}秒): {error_type}")
+                        if was_connected:
+                            logger.warning(
+                                f"【{self.cookie_id}】网络连接断开"
+                                f"(第{self.connection_manager.network_failures}次，"
+                                f"已连接{connected_duration:.1f}秒): {error_type}"
+                            )
+                        else:
+                            logger.warning(
+                                f"【{self.cookie_id}】网络连接建立失败"
+                                f"(第{self.connection_manager.network_failures}次): "
+                                f"{error_type}"
+                            )
                         
                         # 检测是否频繁短连接断开
-                        if self.connection_manager.record_short_disconnect(connected_duration):
+                        if (
+                            was_connected
+                            and self.connection_manager.record_short_disconnect(connected_duration)
+                        ):
                             # 频繁短连接断开，禁用账号
                             logger.error(f"【{self.cookie_id}】频繁短连接断开，禁用账号")
                             try:
@@ -3232,11 +3296,10 @@ class XianyuAsync:
                     
                     # 只有服务端明确返回 Token/Session 失效才清除缓存；网络、代理、
                     # 网关等临时异常保留缓存，避免误删后触发无谓的 Token 刷新。
-                    if (
-                        attempt_duration < 15
-                        and self._cookie_token_manager
-                        and self._is_explicit_token_or_session_failure(error_type, error_msg)
-                    ):
+                    if is_explicit_auth_error:
+                        self.current_token = None
+                        self._using_expired_startup_token = False
+                    if is_explicit_auth_error and self._cookie_token_manager:
                         logger.warning(
                             f"【{self.cookie_id}】连接尝试{attempt_duration:.1f}秒后收到明确的"
                             "Token/Session失效错误，清除缓存..."

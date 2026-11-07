@@ -25,6 +25,9 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from app.core.config import get_settings
+from common.db.init_database import ddl_connection, init_advisory_lock
+from common.db.redis_client import close_redis_client, initialize_redis_client
+from common.db.scheduled_publish_rule_schema import ensure_scheduled_publish_rule_schema
 from common.utils.logging_utils import setup_logging
 from common.utils.network_utils import resolve_listen_host
 
@@ -74,7 +77,23 @@ async def lifespan(app: FastAPI):
         logger.error("数据库连接失败，服务退出")
         sys.exit(1)
 
-    # 只读取 backend 已准备好的服务间 API 令牌，scheduler 不负责数据库初始化。
+    # Scheduler 可能被单独启动；任务运行前必须确保定时发布表结构已完成幂等升级。
+    try:
+        async with init_advisory_lock():
+            async with ddl_connection() as conn:
+                await ensure_scheduled_publish_rule_schema(conn)
+    except Exception:
+        logger.exception("定时发布相关表结构自检失败，服务退出")
+        raise
+
+    # 初始化 Redis 健康连接池；失败时按指数退避重试，最终失败则停止启动。
+    try:
+        await initialize_redis_client()
+    except Exception:
+        logger.exception("Redis连接初始化失败，服务退出")
+        raise
+
+    # 只读取 backend 已准备好的服务间 API 令牌，scheduler 不负责完整数据库初始化。
     try:
         from common.utils.internal_token_service import load_internal_api_token
         await load_internal_api_token(settings)
@@ -116,6 +135,12 @@ async def lifespan(app: FastAPI):
     from common.services.order_service import close_goofish_connector
     await close_goofish_connector()
     logger.info("goofish API 连接池已关闭")
+
+    # 先释放Redis客户端，再断开全局连接池
+    try:
+        await close_redis_client()
+    except Exception:
+        logger.exception("关闭Redis连接失败")
 
 
 # 创建FastAPI应用

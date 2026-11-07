@@ -6,6 +6,8 @@ import { type AdminStats, type TodayStats, getAdminStats, getTodayStats } from '
 import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { OrderAmountChart } from '@/components/common/OrderAmountChart'
+import { PublicAdvertisements } from '@/components/common/PublicAdvertisements'
+import { usePublicAdvertisements } from '@/components/common/usePublicAdvertisements'
 
 interface DashboardStats {
   totalAccounts: number
@@ -18,8 +20,6 @@ interface DashboardStats {
   usedAccountCount: number
   remainingAccountCount: number | null
 }
-
-
 
 export function Dashboard() {
   const { addToast } = useUIStore()
@@ -39,6 +39,8 @@ export function Dashboard() {
   })
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null)
   const [todayStats, setTodayStats] = useState<TodayStats | null>(null)
+  const advertisements = usePublicAdvertisements()
+  const { loadAds } = advertisements
 
   /** 加载基础统计数据 */
   const loadStats = async () => {
@@ -98,14 +100,13 @@ export function Dashboard() {
     // 异步独立加载各个模块，不互相等待
     loadStats()
     loadAdminStats()
+    loadAds()
   }
 
   useEffect(() => {
     if (!_hasHydrated || !isAuthenticated || !token) return
     loadDashboard()
   }, [_hasHydrated, isAuthenticated, token])
-
-
 
   const statCards = [
     {
@@ -228,6 +229,7 @@ export function Dashboard() {
         )}
       </div>
 
+      <PublicAdvertisements placement="dashboard" {...advertisements} />
 
       {/* Admin Stats - 管理员专属 */}
       {user?.is_admin && (
